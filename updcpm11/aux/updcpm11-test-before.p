@@ -14,10 +14,8 @@ file-name = "/usr/preserve/" + wk-upd-name + ".pos-parm.d" .
 
 unix silent value("cp " + file-name  + " " + file-name  + ".bkuplast.$(date '+%Y%m%d%H%M%S') 2>/dev/null").
 
-message " before test " skip 
-    "this program will update the pos-parm file to set store number to " + wk-store + " " skip
-    "so that you can test " + wk-upd-name + " with this POS. " skip
-    "after running this, you can run updcpm10-test-after.p to restore the original file. " skip
+message 
+    "Setting store number to " + wk-store + " so " + wk-upd-name + " can be tested . "
     view-as alert-box .
 
 output to value(file-name) .
@@ -38,13 +36,17 @@ pos-parm.cost-center = wk-store .
 
 disp pos-parm with frame aaa title "Position Parameter" no-error.
 
+message 
+    "Resetting accounts 1-9 to non CPM pricing. "
+    view-as alert-box .
+
 for each cust where cust.acct-nbr < 10 :
     assign 
         cust.cpmprc = 12/31/2029 
         cust.cpmpri = 12/31/2029 .
-    dist cust with 1 col title "turn cust 1-9 off of cpm pricing for test" no-error.
+    disp cust with 5 col title "turn cust 1-9 off of cpm pricing for test" no-error.
 end.
 
-message "pos-parm file updated with store number " + wk-store + " for " + wk-upd-name + " test. " skip 
-    "Remember to restore the original file after the test by running " + wk-upd-name + "-after.p" skip
+message "Set up complete. " skip(2)
+    "After " + wk-upd-name + " is applied run  " + wk-upd-name + "-after.p to confirm success. " skip
     view-as alert-box .
