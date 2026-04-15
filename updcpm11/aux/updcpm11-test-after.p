@@ -49,5 +49,5 @@ if wk-log then do:
         message "Original file not found. Manual intervention needed to restore the file." view-as alert-box.
 end.
 else
-    message "Original file not restored. Remember to restore it before running any other tests." view-as alert-box.
+    message "Original file not restored." view-as alert-box.
 
