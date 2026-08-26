@@ -1,0 +1,291 @@
+/*    DATE=09/01/26  TIME=00001 */
+
+def var pgm-nm      as c no-undo init "PGMOE".
+
+def var fatal-error as l init false  no-undo.
+def var pgm-cmnt    as c no-undo.
+
+pause 0 before-hide.
+status input off.
+abort1:
+repeat on error undo abort1, retry abort1:
+   abort2:
+   repeat on error undo abort2, retry abort2:
+      if fatal-error
+      then do:
+         output to ERROR.
+         display "ERR 1 occured during download program execution"
+            with no-labels no-box frame pgmerr1.
+         output close.
+         return.
+      end.
+      assign fatal-error = true
+             pgm-cmnt = pgm-nm.
+
+def var wk-outfile as char.
+def var wk-dept as char.
+def var wk-dept-prefix as char.
+def var list-pr as dec.
+def var new-pr as dec.
+def var cnt as int.
+def var x-ref-dept as char
+   init "11,AC,18,IM,21,CC,25,AU,50,AP,53,SE,80,BR,2,xx" no-undo.
+def var wk-subdept-cd   as char no-undo.
+def var wk-cat-cd       as char no-undo.
+def var lHasChanges     as logical  no-undo.
+
+def stream log.
+def stream dump.
+def stream s_increase.
+
+def temp-table tt-increase
+   field version    as char
+   field field2     as char
+   field division   as char
+   field area       as char
+   field district   as char
+   field sales-nbr  as char
+   field dept       as char
+   field subdept-cd as char
+   field cat-cd     as char
+   field field10    as char
+   field pct        as int .
+
+output stream log to log/PGMOE.lg append.
+put stream log skip(1) today " : " string(time,"hh:mm:ss") " : Start " skip.
+
+if search("update/PGMOE.input") = ?
+then do:
+   put stream log today " : " string(time,"hh:mm:ss") " : input file update/PGMOE.input does not exist" skip.
+   output stream log close.
+   return.
+end.
+input stream s_increase from update/PGMOE.input no-echo.
+
+repeat transaction:
+   create tt-increase.
+   import stream s_increase tt-increase.
+   assign tt-increase.division = if length(tt-increase.division) = 1 then "0" + tt-increase.division
+                                 else tt-increase.division
+          tt-increase.area     = if length(tt-increase.area) = 1 then "0" + tt-increase.area
+                                 else tt-increase.area
+          tt-increase.district = if length(tt-increase.district) = 1 then "0" + tt-increase.district
+                                 else tt-increase.district.
+end.
+
+input stream s_increase close.
+
+find last pos-parm where pos-parm.p-eff-dt <= today no-lock no-error.
+if avail pos-parm
+then find store where store.cost-center = pos-parm.cost-center no-lock no-error.
+
+if not avail store then do:
+
+   put stream log today " : " string(time,"hh:mm:ss") " : Could not determine store dist " skip.
+   output stream log close.
+   return.
+
+end.
+
+put stream log today " : " string(time,"hh:mm:ss") " : Store " store.cost-center " : DAD " store.division " " store.area  " " ccn-district " " store.dist skip.
+
+lHasChanges = false.
+if can-find( first tt-increase
+             where tt-increase.division = store.division     and
+                 ( tt-increase.area     = store.area         or
+                   tt-increase.area     = "00" )              and
+                 ( tt-increase.district = store.ccn-district or
+                   tt-increase.district = "00" ) )
+   then do:
+   put stream log today " : " string(time,"hh:mm:ss") " : store in bump " skip.
+
+   /* b4 dump effective ss iv shceds */
+   put stream log today " : " string(time,"hh:mm:ss") " : Dump before " skip .
+   wk-outfile = "/usr/preserve/prl-dtl.before.PGMOE"  .
+   run dumper.
+
+   /* bump ss iv */
+   put stream log today " : " string(time,"hh:mm:ss") " : Increase block start" skip .
+
+   for each prl-hdr no-lock
+      where (prl-hdr.version begins "IV" )
+      and prl-hdr.exp-dt >= today:
+
+      put stream log today " : " string(time,"hh:mm:ss") " : prl-hdr.version " prl-hdr.version  skip.
+      for each prl-dtl of prl-hdr.
+
+         assign wk-dept = "".
+         
+         find prod no-lock
+            where prod.sales-nbr = prl-dtl.sales-nbr
+               no-error.
+         
+         if avail prod then
+         do:
+            assign 
+              wk-dept       =  substring(prod.dsc, 1, 2)
+              wk-subdept-cd =  substring(prod.dsc, 3, 2)
+              wk-cat-cd     =  substring(prod.dsc, 5, 3)
+              .
+                   
+            find first tt-increase
+               where tt-increase.division = store.division     and
+                   ( tt-increase.area     = store.area         or
+                     tt-increase.area     = "00" )              and
+                   ( tt-increase.district = store.ccn-district or
+                     tt-increase.district = "00" )              and 
+                     tt-increase.version  = substring(prl-hdr.version,1,2) and                              
+                     prod.dsc begins tt-increase.dept + tt-increase.subdept-cd + tt-increase.cat-cd
+                     /*
+                     tt-increase.dept     = wk-dept        and
+                     tt-increase.subdept-cd = wk-subdept-cd     and 
+                     tt-increase.cat-cd   = wk-cat-cd  */
+                     no-error.
+         end.
+         if not available tt-increase then next. 
+         
+         run get-list.
+
+         assign
+            cnt = cnt + 1
+            new-pr = prl-dtl.pr[1] * ( 1 + tt-increase.pct / 100).
+
+         put stream log today " : " string(time,"hh:mm:ss") " : "
+            " " cnt
+            " " prl-dtl.sales-nbr
+            " " wk-dept
+            " " wk-dept-prefix
+            " bump: " new-pr
+            " lp:" list-pr
+            " pct:" tt-increase.pct
+            " b4:" prl-dtl.pr[1] .
+
+         if (new-pr < list-pr and prl-dtl.pr[1] <> new-pr) or 
+            (new-pr > list-pr and prl-dtl.pr[1] <> list-pr) then
+            lHasChanges = true.
+            
+         if new-pr < list-pr
+            or list-pr = 0 then
+            prl-dtl.pr = new-pr.
+         else
+            prl-dtl.pr = list-pr.
+
+         put stream log
+            " af:" prl-dtl.pr[1]
+            skip .
+
+      end.
+   end.
+   if lHasChanges then 
+      run sod/priceSchedules.p(input "IV").
+      
+   put stream log today " : " string(time,"hh:mm:ss") " : bump count : " cnt skip .
+   put stream log today " : " string(time,"hh:mm:ss") " : Increase block complete " skip .
+
+   /* af dump effective ss iv shceds */
+   put stream log today " : " string(time,"hh:mm:ss") " : Dump after" skip .
+   wk-outfile = "/usr/preserve/prl-dtl.after.PGMOE"  .
+   run dumper.
+
+end.
+else do:
+   put stream log today " : " string(time,"hh:mm:ss") " : store NOT in bump dad " skip.
+end.
+   do for fd-chng transaction:
+           create fd-chng.
+           assign fd-chng.fd-nm = pgm-nm
+         fd-chng.dt = today
+         fd-chng.tm = time
+         fd-chng.seq-nbr = 1
+         fd-chng.chng-typ = "PGM"
+         fd-chng.chng-user = "CENTRAL"
+         fd-chng.src-fd = pgm-nm
+         fd-chng.cmnt = pgm-cmnt.
+   end.
+
+   unix silent rm -fr ./tmp/proerr update/PGMOE.input.
+
+put stream log today " : " string(time,"hh:mm:ss") " : Call notify " skip.
+
+unix silent notify.sh 142. 
+
+put stream log today " : " string(time,"hh:mm:ss") " : Complete " skip.
+      output stream log close.
+
+      return.
+   end. /* abort2 */
+end. /* abort1 */
+output to ERROR.
+display "ERR 2 occured during download program execution"
+   with no-labels no-box frame pgmerr2.
+output close.
+return.
+
+procedure dumper.
+   output stream dump to value(wk-outfile) .
+   for each prl-hdr no-lock
+      where (prl-hdr.version begins "IV" or prl-hdr.version begins "SS")
+      and prl-hdr.exp-dt >= today:
+      for each prl-dtl no-lock of prl-hdr.
+         export stream dump prl-dtl.
+      end.
+   end.
+   output stream dump close.
+end.
+
+procedure get-list.
+
+   def buffer lp-prl-dtl for prl-dtl .
+   def buffer buf-prl-hdr for prl-hdr.
+   assign
+      list-pr = 0
+      wk-dept-prefix = "xx".
+
+   if avail prod
+      then do:
+
+      if can-do(x-ref-dept, wk-dept )
+         then wk-dept-prefix = entry(lookup(wk-dept, x-ref-dept) + 1, x-ref-dept).
+      else wk-dept-prefix = "xx".
+
+      find last buf-prl-hdr no-lock
+         where buf-prl-hdr.prl-typ-cd   = wk-dept-prefix
+         and buf-prl-hdr.eff-dt         <= today
+         and buf-prl-hdr.exp-dt         >= today
+            no-error.
+
+      if avail buf-prl-hdr
+         then do :
+
+         find last lp-prl-dtl no-lock
+            where lp-prl-dtl.version   = buf-prl-hdr.version
+            and lp-prl-dtl.sales-nbr   = prod.sales-nbr
+            and lp-prl-dtl.min-qty     <= integer(prl-dtl.min-qty)
+            no-error.
+
+         if avail lp-prl-dtl
+            then list-pr = lp-prl-dtl.pr[1].
+      end.
+   
+      if list-pr > 0 then return.
+ 
+      //Check NS schedules      
+      find last buf-prl-hdr where buf-prl-hdr.version     begins "NS"   and
+                                  buf-prl-hdr.eff-dt     <= today       and
+                                  buf-prl-hdr.exp-dt     >= today
+                              no-lock no-error.
+
+      if avail buf-prl-hdr
+         then do :
+
+         find last lp-prl-dtl no-lock
+            where lp-prl-dtl.version   = buf-prl-hdr.version
+            and lp-prl-dtl.sales-nbr   = prod.sales-nbr
+            and lp-prl-dtl.min-qty     <= integer(prl-dtl.min-qty)
+            no-error.
+
+         if avail lp-prl-dtl
+            then list-pr = lp-prl-dtl.pr[1].
+      end.      
+   end.
+end.
